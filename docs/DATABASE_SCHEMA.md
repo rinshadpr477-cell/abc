@@ -50,6 +50,7 @@ Adjacency (`parent`) plus a materialised path (`ancestors`), no depth limit.
 | `description` | String | ≤ 5000 |
 | `price` | Number | ≥ 0 |
 | `salePrice` | Number \| null | must be `< price` to be valid |
+| `imageUrl` | String \| null | optional external image link, absolute `http`/`https` only, ≤ 2048 chars; absent on products created before the field existed (serialised as `null`). No image is uploaded or stored by the API |
 | `effectivePrice` | Number | maintained by a pre-validate hook: `salePrice` when `0 ≤ salePrice < price`, else `price`. This is the price charged and the field used for price filters/sorting |
 | `stock` | Integer | ≥ 0 |
 | `category` | ObjectId → `categories` | required; must reference an active category on create/move |

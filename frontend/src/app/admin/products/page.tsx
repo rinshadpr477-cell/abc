@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Package, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Package, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge, Card, Input, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea } from '@/components/ui/basic';
@@ -10,8 +10,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { ConfirmDialog, EmptyState, ErrorState, Field, PageHeader, PaginationBar, TableSkeleton, useDebounced } from '@/components/common';
 import { CategorySelect, useCategoryTree } from '@/components/catalog/category-parts';
 import { PriceTag } from '@/components/catalog/product-parts';
+import { ProductImage } from '@/components/catalog/product-image';
 import { ApiError, type FieldError } from '@/lib/api';
-import { categoryId, categoryName } from '@/lib/utils';
+import { categoryId, categoryName, isHttpUrl } from '@/lib/utils';
 import { productService, type ProductInput } from '@/services';
 import type { Product, ProductStatus } from '@/types';
 
@@ -26,10 +27,11 @@ interface FormState {
   salePrice: string;
   stock: string;
   category: string | null;
+  imageUrl: string;
   status: ProductStatus;
 }
 
-const emptyForm: FormState = { name: '', sku: '', description: '', price: '', salePrice: '', stock: '0', category: null, status: 'ACTIVE' };
+const emptyForm: FormState = { name: '', sku: '', description: '', price: '', salePrice: '', stock: '0', category: null, imageUrl: '', status: 'ACTIVE' };
 
 function validate(f: FormState): { errors: Record<string, string>; body?: ProductInput } {
   const errors: Record<string, string> = {};
@@ -46,12 +48,15 @@ function validate(f: FormState): { errors: Record<string, string>; body?: Produc
   const stock = Number(f.stock);
   if (f.stock === '' || !Number.isInteger(stock) || stock < 0) errors.stock = 'Whole number, 0 or more';
   if (!f.category) errors.category = 'Choose a category';
+  const imageUrl = f.imageUrl.trim();
+  if (imageUrl && !isHttpUrl(imageUrl)) errors.imageUrl = 'Enter a valid http:// or https:// URL';
+  else if (imageUrl.length > 2048) errors.imageUrl = 'URL is too long (max 2048 characters)';
   if (Object.keys(errors).length) return { errors };
   return {
     errors,
     body: {
       name: f.name.trim(), sku: f.sku.trim(), description: f.description.trim(),
-      price, salePrice, stock, category: f.category!, status: f.status,
+      price, salePrice, stock, category: f.category!, imageUrl: imageUrl || null, status: f.status,
     },
   };
 }
@@ -69,6 +74,10 @@ export default function ProductsPage() {
   const [del, setDel] = useState<Product | null>(null);
   const [delError, setDelError] = useState<string | null>(null);
   const debounced = useDebounced(search);
+  // The preview only loads once typing pauses, so partial URLs ("http://lo…") never trigger requests.
+  const imageCandidate = form?.imageUrl.trim() ?? '';
+  const settledImageUrl = useDebounced(imageCandidate, 600);
+  const showPreview = !!imageCandidate && imageCandidate === settledImageUrl && isHttpUrl(imageCandidate);
 
   const q = useQuery({
     queryKey: ['admin-products', { page, debounced, category, status }],
@@ -108,7 +117,7 @@ export default function ProductsPage() {
     setErrors({}); setFormError(null);
     setForm({
       id: p.id, name: p.name, sku: p.sku, description: p.description ?? '', price: String(p.price),
-      salePrice: p.salePrice != null ? String(p.salePrice) : '', stock: String(p.stock), category: categoryId(p.category), status: p.status,
+      salePrice: p.salePrice != null ? String(p.salePrice) : '', stock: String(p.stock), category: categoryId(p.category), imageUrl: p.imageUrl ?? '', status: p.status,
     });
   };
   const submit = () => {
@@ -191,6 +200,17 @@ export default function ProductsPage() {
                     <SelectContent><SelectItem value="ACTIVE">Active</SelectItem><SelectItem value="INACTIVE">Inactive</SelectItem></SelectContent>
                   </Select>
                 </Field>
+                <div className="sm:col-span-2">
+                  <Field label="Image URL (optional)" htmlFor="p-image" error={errors.imageUrl}>
+                    <div className="flex gap-2">
+                      <Input id="p-image" type="url" inputMode="url" placeholder="https://example.com/photo.jpg" value={form.imageUrl} onChange={(e) => set('imageUrl', e.target.value)} />
+                      {form.imageUrl && <Button type="button" variant="outline" onClick={() => set('imageUrl', '')} aria-label="Clear image URL"><X /> Clear</Button>}
+                    </div>
+                  </Field>
+                  {showPreview && (
+                    <ProductImage src={imageCandidate} alt="Image preview" showLabel className="mt-2 h-40 w-full rounded-lg border" iconClassName="size-8" />
+                  )}
+                </div>
                 <div className="sm:col-span-2"><Field label="Description" htmlFor="p-desc"><Textarea id="p-desc" value={form.description} onChange={(e) => set('description', e.target.value)} /></Field></div>
               </div>
               <DialogFooter>

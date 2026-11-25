@@ -136,3 +136,75 @@ describe('Products', () => {
     expect((await h.http().get(`/api/v1/products/${used.id}`).set(h.auth(admin))).body.data.status).toBe('INACTIVE');
   });
 });
+
+describe('Product image URL', () => {
+  const post = (body) => h.http().post('/api/v1/products').set(h.auth(admin)).send({ name: 'Img Item', sku: `IMG-${Math.random().toString(36).slice(2, 8)}`, price: 10, stock: 1, category: cats.laptops.id, ...body });
+  const patch = (id, body) => h.http().patch(`/api/v1/products/${id}`).set(h.auth(admin)).send(body);
+
+  test('creates with a valid http(s) image URL and returns it from create, get and list', async () => {
+    const url = 'https://images.example.com/path/photo.jpg?w=400';
+    const res = await post({ imageUrl: `  ${url} ` });
+    expect(res.status).toBe(201);
+    expect(res.body.data.imageUrl).toBe(url);
+    expect((await h.http().get(`/api/v1/products/${res.body.data.id}`).set(h.auth(admin))).body.data.imageUrl).toBe(url);
+    const listed = (await list('?search=Img Item')).body.data;
+    expect(listed[0].imageUrl).toBe(url);
+    expect((await post({ imageUrl: 'http://cdn.example.com/a.png' })).status).toBe(201);
+  });
+
+  test('image is optional: omitted, null and "" all create a product with imageUrl null', async () => {
+    for (const body of [{}, { imageUrl: null }, { imageUrl: '' }]) {
+      const res = await post(body);
+      expect(res.status).toBe(201);
+      expect(res.body.data.imageUrl).toBeNull();
+    }
+  });
+
+  test('replaces and clears the image URL on update without touching other fields', async () => {
+    const p = (await post({ imageUrl: 'https://a.example.com/1.png', price: 50, stock: 7 })).body.data;
+    const replaced = await patch(p.id, { imageUrl: 'https://b.example.com/2.png' });
+    expect(replaced.body.data).toMatchObject({ imageUrl: 'https://b.example.com/2.png', price: 50, stock: 7, name: 'Img Item' });
+    const cleared = await patch(p.id, { imageUrl: null });
+    expect(cleared.body.data.imageUrl).toBeNull();
+    await patch(p.id, { imageUrl: 'https://c.example.com/3.png' });
+    expect((await patch(p.id, { imageUrl: '' })).body.data.imageUrl).toBeNull();
+    // updates that do not mention imageUrl leave it alone
+    await patch(p.id, { imageUrl: 'https://d.example.com/4.png' });
+    expect((await patch(p.id, { stock: 3 })).body.data.imageUrl).toBe('https://d.example.com/4.png');
+  });
+
+  test.each([
+    ['javascript scheme', 'javascript:alert(1)'],
+    ['data URI', 'data:image/png;base64,AAAA'],
+    ['ftp scheme', 'ftp://example.com/a.png'],
+    ['file scheme', 'file:///etc/passwd'],
+    ['not a URL', 'not a url'],
+    ['relative path', '/images/a.png'],
+    ['no host', 'http://'],
+    ['too long', `https://example.com/${'a'.repeat(2100)}`],
+    ['non-string', 123],
+  ])('rejects an invalid image URL (%s) on create and update', async (_label, bad) => {
+    const created = await post({ imageUrl: bad });
+    expect(created.status).toBe(422);
+    expect(created.body.errors.some((e) => e.field === 'imageUrl')).toBe(true);
+    const p = (await post({})).body.data;
+    expect((await patch(p.id, { imageUrl: bad })).status).toBe(422);
+    expect((await h.http().get(`/api/v1/products/${p.id}`).set(h.auth(admin))).body.data.imageUrl).toBeNull();
+  });
+
+  test('legacy products stored without the field still work (null image, still orderable)', async () => {
+    const legacy = await h.models.Product.collection.insertOne({
+      name: 'Legacy product', sku: 'LEGACY-1', price: 20, effectivePrice: 20, stock: 5, category: new (require('mongoose').Types.ObjectId)(cats.laptops.id), status: 'ACTIVE',
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+    const id = String(legacy.insertedId);
+    const got = await h.http().get(`/api/v1/products/${id}`);
+    expect(got.status).toBe(200);
+    expect(got.body.data.imageUrl).toBeNull();
+    expect((await list('?search=Legacy')).body.data[0].imageUrl).toBeNull();
+    const customer = await h.registerCustomer();
+    const order = await h.http().post('/api/v1/orders').set(h.auth(customer)).send({ items: [{ productId: id, quantity: 1 }] });
+    expect(order.status).toBe(201);
+    expect((await patch(id, { name: 'Legacy product v2' })).status).toBe(200);
+  });
+});

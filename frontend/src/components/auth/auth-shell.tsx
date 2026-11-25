@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { Boxes, ShieldCheck, ShoppingCart } from 'lucide-react';
 import { Logo } from '@/components/common';
+import { ThemeToggle } from '@/components/layout/theme-toggle';
 import { RedirectIfAuthed } from '@/components/auth/guards';
 
 export function AuthShell({ title, subtitle, children, footer }: {
@@ -26,7 +27,8 @@ export function AuthShell({ title, subtitle, children, footer }: {
           </div>
           <p className="text-xs opacity-60">© ABC Ecommerce</p>
         </div>
-        <div className="flex flex-1 items-center justify-center p-6">
+        <div className="relative flex flex-1 items-center justify-center p-6">
+          <ThemeToggle className="absolute top-4 right-4" />
           <div className="w-full max-w-sm space-y-6">
             <div className="lg:hidden"><Logo /></div>
             <div>

@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { ImageOff, Minus, Plus, ShoppingCart } from 'lucide-react';
+import { Minus, Plus, ShoppingCart } from 'lucide-react';
+import { ProductImage } from '@/components/catalog/product-image';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge, Card } from '@/components/ui/basic';
@@ -43,8 +44,8 @@ export function ProductCard({ product }: { product: Product }) {
   const addToCart = useAddToCart();
   return (
     <Card className="flex flex-col overflow-hidden">
-      <Link href={`/products/${product.id}`} className="flex aspect-[4/3] items-center justify-center bg-muted/50" aria-label={product.name}>
-        <ImageOff className="size-8 text-muted-foreground/40" />
+      <Link href={`/products/${product.id}`} className="block" aria-label={product.name}>
+        <ProductImage src={product.imageUrl} alt={product.name} className="aspect-[4/3] w-full" />
       </Link>
       <div className="flex flex-1 flex-col gap-2 p-4">
         <p className="text-xs text-muted-foreground">{categoryName(product.category)}</p>

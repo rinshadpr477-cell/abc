@@ -26,3 +26,13 @@ export function categoryId(c: { id?: string; _id?: string } | string): string {
 export function newIdempotencyKey(): string {
   return `chk-${crypto.randomUUID()}`;
 }
+
+/** True for an absolute http/https URL (mirrors the API rule; the API still validates). */
+export function isHttpUrl(value: string): boolean {
+  try {
+    const u = new URL(value);
+    return (u.protocol === 'http:' || u.protocol === 'https:') && !!u.hostname;
+  } catch {
+    return false;
+  }
+}

@@ -11,6 +11,7 @@ import { RequireRole } from '@/components/auth/guards';
 import { authService } from '@/services';
 import { useAuthStore } from '@/stores/auth.store';
 import { cn } from '@/lib/utils';
+import { ThemeToggle } from '@/components/layout/theme-toggle';
 
 const NAV: { title: string; href: string; icon: LucideIcon }[] = [
   { title: 'Dashboard', href: '/admin', icon: LayoutDashboard },
@@ -71,6 +72,7 @@ function Shell({ children }: { children: React.ReactNode }) {
           <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setOpen(true)} aria-label="Open menu"><Menu /></Button>
           <p className="text-sm font-medium text-muted-foreground">ABC Ecommerce · Admin</p>
           <div className="ml-auto flex items-center gap-3">
+            <ThemeToggle />
             <span className="hidden text-sm sm:inline">{user?.name}</span>
             <Button variant="outline" size="sm" onClick={logout}><LogOut /> Sign out</Button>
           </div>

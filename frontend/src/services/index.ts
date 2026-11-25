@@ -54,6 +54,7 @@ export interface ProductInput {
   salePrice?: number | null;
   stock?: number;
   category?: string;
+  imageUrl?: string | null;
   status?: ProductStatus;
 }
 

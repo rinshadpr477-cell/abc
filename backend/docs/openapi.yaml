@@ -109,6 +109,7 @@ components:
         inStock: { type: boolean }
         stock: { type: integer }
         category: { type: object }
+        imageUrl: { type: string, nullable: true, format: uri, description: Optional http(s) image link (null when none) }
         status: { type: string, enum: [ACTIVE, INACTIVE] }
     ProductInput:
       type: object
@@ -121,6 +122,7 @@ components:
         salePrice: { type: number, nullable: true, description: Must be lower than price }
         stock: { type: integer, minimum: 0 }
         category: { type: string }
+        imageUrl: { type: string, nullable: true, maxLength: 2048, description: 'Absolute http or https URL. Send null or an empty string to clear it. Other schemes (javascript:, data:, ftp:) are rejected with 422.' }
         status: { type: string, enum: [ACTIVE, INACTIVE] }
     OrderStatus:
       type: string

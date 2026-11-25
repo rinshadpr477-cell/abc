@@ -79,6 +79,7 @@ export interface Product {
   inStock: boolean;
   stock: number;
   category: CategoryRef | string;
+  imageUrl: string | null;
   status: ProductStatus;
   createdAt: string;
 }

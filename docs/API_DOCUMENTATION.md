@@ -94,11 +94,11 @@ Legend: 🌐 public · 🔑 any signed-in user · 👤 CUSTOMER · 🛡 ADMIN.
 |---|---|---|
 | `GET /products` | 🌐 (admins get extra visibility) | Query: `page, limit, search (name or SKU, case-insensitive substring), category (includes ALL descendants), minPrice, maxPrice (effective price), sortBy = price|name|createdAt (default createdAt), order = asc|desc (default desc), inStock=true, status (admin only)`. Non-admins only see ACTIVE products in active categories; out-of-stock ones are returned with `inStock:false`. `422` if `minPrice > maxPrice` |
 | `GET /products/:id` | 🌐 | Populated `category`. Inactive product or inactive category → `404` for non-admins |
-| `POST /products` | 🛡 | `{ name, sku, description?, price, salePrice? (null/omit, must be < price), stock (int ≥ 0), category, status? }`. `409 DUPLICATE_SKU`; `422 INVALID_CATEGORY / INACTIVE_CATEGORY` |
+| `POST /products` | 🛡 | `{ name, sku, description?, price, salePrice? (null/omit, must be < price), stock (int ≥ 0), category, imageUrl? (absolute http/https URL ≤ 2048 chars; `null` or `""` clears it), status? }`. `409 DUPLICATE_SKU`; `422 INVALID_CATEGORY / INACTIVE_CATEGORY` |
 | `PATCH /products/:id` | 🛡 | Any subset of the create fields (also used for stock changes) |
 | `DELETE /products/:id` | 🛡 | `{ deleted, deactivated }` — hard delete when never ordered, otherwise sets `INACTIVE` |
 
-Product JSON: `{ id, name, sku, description, price, salePrice, effectivePrice, onSale, inStock, stock, category, status, createdAt, updatedAt }`.
+Product JSON: `{ id, name, sku, description, price, salePrice, effectivePrice, onSale, inStock, stock, category, imageUrl (string or null), status, createdAt, updatedAt }`.
 
 ### Orders
 

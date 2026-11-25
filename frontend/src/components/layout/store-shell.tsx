@@ -12,6 +12,7 @@ import { authService } from '@/services';
 import { useAuthStore } from '@/stores/auth.store';
 import { selectCartCount, useCartStore } from '@/stores/cart.store';
 import { APP_NAME } from '@/lib/utils';
+import { ThemeToggle } from '@/components/layout/theme-toggle';
 
 function SearchBox() {
   const router = useRouter();
@@ -56,6 +57,7 @@ export function StoreShell({ children }: { children: React.ReactNode }) {
             <SearchBox />
           </Suspense>
           <div className="ml-auto flex items-center gap-1">
+            <ThemeToggle className="mr-1" />
             {user?.role !== 'ADMIN' && (
               <Button asChild variant="ghost" size="icon" aria-label="Cart">
                 <Link href="/cart" className="relative">

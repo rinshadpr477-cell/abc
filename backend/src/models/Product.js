@@ -2,6 +2,8 @@ const mongoose = require('mongoose');
 
 const PRODUCT_STATUS = Object.freeze({ ACTIVE: 'ACTIVE', INACTIVE: 'INACTIVE' });
 
+const { isHttpUrl } = require('../utils/helpers');
+
 const productSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, minlength: 2, maxlength: 200 },
@@ -14,6 +16,17 @@ const productSchema = new mongoose.Schema(
     effectivePrice: { type: Number, min: 0 },
     stock: { type: Number, required: true, min: 0, default: 0, validate: Number.isInteger },
     category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
+    // Optional external image link (http/https only). No upload service: the URL is stored as given.
+    imageUrl: {
+      type: String,
+      trim: true,
+      maxlength: 2048,
+      default: null,
+      validate: {
+        validator: (v) => v == null || isHttpUrl(v),
+        message: 'imageUrl must be a valid http(s) URL',
+      },
+    },
     status: { type: String, enum: Object.values(PRODUCT_STATUS), default: PRODUCT_STATUS.ACTIVE },
   },
   {
@@ -24,6 +37,7 @@ const productSchema = new mongoose.Schema(
         ret.id = String(ret._id);
         delete ret._id;
         delete ret.__v;
+        ret.imageUrl = ret.imageUrl || null; // legacy products created before the field existed
         ret.onSale = ret.salePrice != null && ret.salePrice < ret.price;
         ret.inStock = ret.stock > 0;
         return ret;

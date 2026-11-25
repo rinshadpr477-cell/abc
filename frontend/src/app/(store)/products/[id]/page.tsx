@@ -4,7 +4,8 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, ImageOff, ShoppingCart } from 'lucide-react';
+import { ArrowLeft, ShoppingCart } from 'lucide-react';
+import { ProductImage } from '@/components/catalog/product-image';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/basic';
 import { ErrorState } from '@/components/common';
@@ -30,9 +31,7 @@ export default function ProductDetailPage() {
     <div>
       <Button variant="ghost" size="sm" onClick={() => router.back()} className="mb-4"><ArrowLeft /> Back</Button>
       <div className="grid gap-8 md:grid-cols-2">
-        <div className="flex aspect-square items-center justify-center rounded-xl bg-muted/50">
-          <ImageOff className="size-12 text-muted-foreground/40" />
-        </div>
+        <ProductImage src={product.imageUrl} alt={product.name} className="aspect-square w-full rounded-xl border" iconClassName="size-12" showLabel />
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
             <Link href={`/?category=${typeof product.category === 'string' ? product.category : (product.category.id ?? product.category._id ?? '')}`} className="hover:underline">

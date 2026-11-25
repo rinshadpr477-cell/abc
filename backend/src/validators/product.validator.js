@@ -1,5 +1,13 @@
 const { z } = require('zod');
 const { objectId, boolString, pagination, searchString } = require('./common');
+const { isHttpUrl } = require('../utils/helpers');
+
+// Optional image link. '' or null clears it; anything else must be an absolute http/https URL.
+const imageUrl = z.union([
+  z.literal('').transform(() => null),
+  z.null(),
+  z.string().trim().max(2048, 'Image URL is too long').refine(isHttpUrl, 'Image URL must be a valid http or https URL'),
+]);
 
 const money = z.number().min(0).max(100000000).multipleOf(0.01);
 
@@ -11,6 +19,7 @@ const fields = {
   salePrice: money.nullable(),
   stock: z.number().int().min(0).max(10000000),
   category: objectId,
+  imageUrl,
   status: z.enum(['ACTIVE', 'INACTIVE']),
 };
 
@@ -26,6 +35,7 @@ const create = z
     salePrice: fields.salePrice.optional(),
     stock: fields.stock,
     category: fields.category,
+    imageUrl: fields.imageUrl.optional(),
     status: fields.status.optional(),
   })
   .strict()
@@ -40,6 +50,7 @@ const update = z
     salePrice: fields.salePrice.optional(),
     stock: fields.stock.optional(),
     category: fields.category.optional(),
+    imageUrl: fields.imageUrl.optional(),
     status: fields.status.optional(),
   })
   .strict()
