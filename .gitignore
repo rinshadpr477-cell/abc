@@ -1,0 +1,45 @@
+node_modules/
+.env
+.env.local
+.env.*.local
+.next/
+coverage/
+*.log
+
+# Local env files (keep *.example)
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Build output / generated
+dist/
+build/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Logs, temp, local backups
+npm-debug.log*
+*.tmp
+*.bak
+*.orig
+*.backup
+backups/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets and data dumps
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+credentials*.json
+*.dump
+*.sql
+*.bson
+*.archive

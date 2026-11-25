@@ -1,0 +1,426 @@
+openapi: 3.0.3
+info:
+  title: ABC Ecommerce API
+  version: 1.0.0
+  description: |
+    Express + MongoDB (Mongoose) + JWT. Roles: `ADMIN`, `CUSTOMER`.
+
+    **Auth:** `POST /auth/login` returns a short-lived `accessToken` (send as `Authorization: Bearer …`).
+    A rotating refresh token is set as an HttpOnly cookie (`refreshToken`, path `/api/v1/auth`).
+
+    **Envelope:** success `{ success, message?, data, meta? }`, error `{ success:false, message, code?, errors? }`.
+    List endpoints return `meta` = `{ page, limit, total, totalPages, hasNextPage, hasPreviousPage }`.
+
+    **Orders:** prices, totals and names are always computed server-side; the client sends only product ids and quantities.
+    Send an `Idempotency-Key` header to make order submission safe to retry.
+# `servers` is injected at runtime from SWAGGER_SERVER_URL (or the relative "/api/v1"); see src/config/swagger.js.
+servers:
+  - url: /api/v1
+tags:
+  - { name: Auth }
+  - { name: Users }
+  - { name: Categories }
+  - { name: Products }
+  - { name: Orders }
+  - { name: Admin }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-fA-F0-9]{24}$' }
+    Page: { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 10 } }
+    Search: { name: search, in: query, schema: { type: string, maxLength: 100 } }
+  responses:
+    Unauthorized: { description: Missing/invalid/expired access token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Forbidden: { description: Role not allowed or account inactive, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NotFound: { description: Resource not found, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Conflict: { description: State conflict (duplicate, in use, invalid transition, insufficient stock), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Validation: { description: Validation failed, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  schemas:
+    Error:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        message: { type: string }
+        code: { type: string, example: INSUFFICIENT_STOCK }
+        errors:
+          type: array
+          items: { type: object, properties: { in: { type: string }, field: { type: string }, message: { type: string } } }
+    Meta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        totalPages: { type: integer }
+        hasNextPage: { type: boolean }
+        hasPreviousPage: { type: boolean }
+    User:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        email: { type: string, format: email }
+        role: { type: string, enum: [ADMIN, CUSTOMER] }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+    AuthResult:
+      type: object
+      properties:
+        success: { type: boolean }
+        data:
+          type: object
+          properties:
+            accessToken: { type: string }
+            user: { $ref: '#/components/schemas/User' }
+    Category:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        description: { type: string }
+        parent: { type: string, nullable: true }
+        ancestors: { type: array, items: { type: string } }
+        level: { type: integer, description: Derived depth (root = 0) }
+        isActive: { type: boolean }
+    CategoryNode:
+      allOf:
+        - $ref: '#/components/schemas/Category'
+        - type: object
+          properties:
+            children: { type: array, items: { $ref: '#/components/schemas/CategoryNode' } }
+    Product:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        sku: { type: string }
+        description: { type: string }
+        price: { type: number }
+        salePrice: { type: number, nullable: true }
+        effectivePrice: { type: number, description: Price charged (sale price when valid) }
+        onSale: { type: boolean }
+        inStock: { type: boolean }
+        stock: { type: integer }
+        category: { type: object }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+    ProductInput:
+      type: object
+      required: [name, sku, price, stock, category]
+      properties:
+        name: { type: string }
+        sku: { type: string }
+        description: { type: string }
+        price: { type: number, minimum: 0 }
+        salePrice: { type: number, nullable: true, description: Must be lower than price }
+        stock: { type: integer, minimum: 0 }
+        category: { type: string }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+    OrderStatus:
+      type: string
+      enum: [PENDING, CONFIRMED, PROCESSING, SHIPPED, DELIVERED, CANCELLED]
+    Order:
+      type: object
+      properties:
+        id: { type: string }
+        orderNumber: { type: string, example: ORD-20261125-A21AC30D }
+        customer: { description: 'Id, or name and email for admins' }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              product: { type: string }
+              name: { type: string }
+              sku: { type: string }
+              unitPrice: { type: number }
+              quantity: { type: integer }
+              lineTotal: { type: number }
+        subtotal: { type: number }
+        total: { type: number }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        statusHistory:
+          type: array
+          items: { type: object, properties: { status: { $ref: '#/components/schemas/OrderStatus' }, at: { type: string, format: date-time }, note: { type: string } } }
+        createdAt: { type: string, format: date-time }
+security:
+  - bearerAuth: []
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Register a customer (role is always CUSTOMER; unknown fields such as `role` are rejected)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string, minLength: 2 }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8, description: 'Needs upper, lower and a digit' }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResult' } } } }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/Validation' }
+  /auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Log in (rate limited)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [email, password], properties: { email: { type: string }, password: { type: string } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResult' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Rotate the refresh cookie and get a new access token (reuse of an old token revokes all sessions)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResult' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /auth/logout:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Revoke the current refresh token and clear the cookie
+      responses: { '200': { description: OK } }
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user
+      responses: { '200': { description: OK }, '401': { $ref: '#/components/responses/Unauthorized' } }
+  /auth/profile:
+    patch:
+      tags: [Auth]
+      summary: Update own name/email
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { name: { type: string }, email: { type: string } } }
+      responses: { '200': { description: OK }, '409': { $ref: '#/components/responses/Conflict' } }
+  /auth/change-password:
+    patch:
+      tags: [Auth]
+      summary: Change password (verifies the current one, revokes other sessions)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [currentPassword, newPassword], properties: { currentPassword: { type: string }, newPassword: { type: string } } }
+      responses: { '200': { description: OK }, '400': { description: Wrong current password } }
+  /users:
+    get:
+      tags: [Users]
+      summary: List users (ADMIN)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - { name: role, in: query, schema: { type: string, enum: [ADMIN, CUSTOMER] } }
+        - { name: isActive, in: query, schema: { type: string, enum: ['true', 'false'] } }
+      responses: { '200': { description: OK }, '403': { $ref: '#/components/responses/Forbidden' } }
+  /users/{id}:
+    get:
+      tags: [Users]
+      summary: User details (ADMIN)
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses: { '200': { description: OK }, '404': { $ref: '#/components/responses/NotFound' } }
+  /users/{id}/status:
+    patch:
+      tags: [Users]
+      summary: Activate / deactivate a customer (ADMIN). Admins and yourself cannot be changed.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [isActive], properties: { isActive: { type: boolean } } } } }
+      responses: { '200': { description: OK }, '400': { description: Self }, '403': { $ref: '#/components/responses/Forbidden' } }
+  /categories/tree:
+    get:
+      tags: [Categories]
+      security: []
+      summary: Full nested category tree (one query). Active categories only unless an ADMIN passes includeInactive=true.
+      parameters: [{ name: includeInactive, in: query, schema: { type: string, enum: ['true', 'false'] } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: '#/components/schemas/CategoryNode' } } } } } } }
+  /categories:
+    get:
+      tags: [Categories]
+      summary: Flat paginated list (ADMIN)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - { name: parent, in: query, description: 'Parent id or the word root', schema: { type: string } }
+        - { name: isActive, in: query, schema: { type: string, enum: ['true', 'false'] } }
+      responses: { '200': { description: OK } }
+    post:
+      tags: [Categories]
+      summary: Create a category (ADMIN). Parent must exist and be active; sibling names are unique.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string }, description: { type: string }, parent: { type: string, nullable: true }, isActive: { type: boolean } } }
+      responses: { '201': { description: Created }, '409': { $ref: '#/components/responses/Conflict' }, '422': { $ref: '#/components/responses/Validation' } }
+  /categories/{id}:
+    get:
+      tags: [Categories]
+      summary: Get a category (ADMIN)
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses: { '200': { description: OK }, '404': { $ref: '#/components/responses/NotFound' } }
+    patch:
+      tags: [Categories]
+      summary: Update / move / (de)activate (ADMIN). Rejects self-parent (SELF_PARENT) and moves under a descendant (CIRCULAR_PARENT); re-paths the subtree transactionally; deactivation cascades to descendants.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { name: { type: string }, description: { type: string }, parent: { type: string, nullable: true }, isActive: { type: boolean } } }
+      responses: { '200': { description: OK }, '422': { $ref: '#/components/responses/Validation' } }
+    delete:
+      tags: [Categories]
+      summary: Delete an empty leaf category (ADMIN). 409 CATEGORY_HAS_CHILDREN / CATEGORY_HAS_PRODUCTS otherwise — deactivate instead.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses: { '200': { description: Deleted }, '409': { $ref: '#/components/responses/Conflict' } }
+  /categories/{id}/descendants:
+    get:
+      tags: [Categories]
+      summary: All descendants (flat, ordered by level) — ADMIN
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses: { '200': { description: OK } }
+  /categories/{id}/ancestors:
+    get:
+      tags: [Categories]
+      summary: Ancestors from root to direct parent — ADMIN
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses: { '200': { description: OK } }
+  /products:
+    get:
+      tags: [Products]
+      security: []
+      summary: |
+        Search/filter products. Anonymous users and customers see ACTIVE products in active categories only
+        (out-of-stock stay visible with `inStock:false`). `category` includes the category and ALL descendants, resolved server-side.
+        Price filters/sort use the effective (sale) price. ADMIN additionally sees inactive products and may use `status`.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - { name: search, in: query, description: Matches name or SKU (case-insensitive), schema: { type: string } }
+        - { name: category, in: query, schema: { type: string } }
+        - { name: minPrice, in: query, schema: { type: number } }
+        - { name: maxPrice, in: query, schema: { type: number } }
+        - { name: sortBy, in: query, schema: { type: string, enum: [price, name, createdAt], default: createdAt } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: desc } }
+        - { name: status, in: query, description: ADMIN only, schema: { type: string, enum: [ACTIVE, INACTIVE] } }
+        - { name: inStock, in: query, schema: { type: string, enum: ['true'] } }
+      responses: { '200': { description: OK } }
+    post:
+      tags: [Products]
+      summary: Create product (ADMIN). Unique SKU, valid price/stock, active category.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ProductInput' } } } }
+      responses: { '201': { description: Created }, '409': { $ref: '#/components/responses/Conflict' }, '422': { $ref: '#/components/responses/Validation' } }
+  /products/{id}:
+    get:
+      tags: [Products]
+      security: []
+      summary: Product details (inactive → 404 for non-admins)
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses: { '200': { description: OK }, '404': { $ref: '#/components/responses/NotFound' } }
+    patch:
+      tags: [Products]
+      summary: Update product / manage stock (ADMIN)
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/ProductInput' } } } }
+      responses: { '200': { description: OK } }
+    delete:
+      tags: [Products]
+      summary: Delete (never ordered) or deactivate (has order history) — ADMIN
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses: { '200': { description: '`{deleted, deactivated}`' } }
+  /orders:
+    post:
+      tags: [Orders]
+      summary: Place an order (CUSTOMER). One MongoDB transaction decrements stock atomically and creates the order.
+      parameters:
+        - { name: Idempotency-Key, in: header, description: Same key + customer returns the original order (200) instead of creating another, schema: { type: string, minLength: 8, maxLength: 128 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  minItems: 1
+                  maxItems: 50
+                  items: { type: object, required: [productId, quantity], properties: { productId: { type: string }, quantity: { type: integer, minimum: 1, maximum: 1000 } } }
+      responses:
+        '201': { description: Order placed, content: { application/json: { schema: { $ref: '#/components/schemas/Order' } } } }
+        '200': { description: Idempotent replay }
+        '409': { description: INSUFFICIENT_STOCK }
+        '422': { description: PRODUCT_UNAVAILABLE / PRODUCT_NOT_FOUND / validation (client-sent prices are rejected) }
+  /orders/my-orders:
+    get:
+      tags: [Orders]
+      summary: Own orders (CUSTOMER)
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/OrderStatus' } }
+      responses: { '200': { description: OK } }
+  /orders/{id}:
+    get:
+      tags: [Orders]
+      summary: Order details. Customers get 404 for orders that are not theirs; admins can read any.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses: { '200': { description: OK }, '404': { $ref: '#/components/responses/NotFound' } }
+  /orders/{id}/cancel:
+    patch:
+      tags: [Orders]
+      summary: Customer cancels own order while PENDING; stock is restored exactly once.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses: { '200': { description: Cancelled }, '403': { $ref: '#/components/responses/Forbidden' }, '409': { $ref: '#/components/responses/Conflict' } }
+  /admin/orders:
+    get:
+      tags: [Admin]
+      summary: All orders (ADMIN); search matches order number or customer name/email
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/OrderStatus' } }
+      responses: { '200': { description: OK } }
+  /admin/orders/{id}/status:
+    patch:
+      tags: [Admin]
+      summary: |
+        Change status (ADMIN). Allowed: PENDING→CONFIRMED→PROCESSING→SHIPPED→DELIVERED; CANCELLED from PENDING, CONFIRMED or PROCESSING.
+        Cancelling restores stock in the same transaction, once. Anything else → 409 INVALID_TRANSITION.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [status], properties: { status: { $ref: '#/components/schemas/OrderStatus' }, note: { type: string } } } } }
+      responses: { '200': { description: OK }, '409': { $ref: '#/components/responses/Conflict' } }
+  /admin/dashboard/stats:
+    get:
+      tags: [Admin]
+      summary: Real aggregate metrics (customers, products, categories, orders, pending orders, revenue excluding cancelled)
+      responses: { '200': { description: OK } }
