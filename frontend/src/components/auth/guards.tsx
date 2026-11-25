@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth.store';
+import { safeNextPath } from '@/lib/redirect';
 import type { Role } from '@/types';
 
 export const homeFor = (role: Role) => (role === 'ADMIN' ? '/admin' : '/');
@@ -43,7 +44,8 @@ export function RedirectIfAuthed({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (ready && user) {
       const next = new URLSearchParams(window.location.search).get('next');
-      router.replace(next && next.startsWith('/') && !next.startsWith('//') ? next : homeFor(user.role));
+      // Strict same-origin validation (blocks //host, /\host, absolute URLs, control characters).
+      router.replace(safeNextPath(next, homeFor(user.role), window.location.origin));
     }
   }, [ready, user, router]);
   if (!ready || user) return <FullPageLoader />;

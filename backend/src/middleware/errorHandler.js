@@ -20,7 +20,6 @@ function normalise(err) {
   return null;
 }
 
-// eslint-disable-next-line no-unused-vars
 const errorHandler = (err, req, res, _next) => {
   const known = normalise(err);
   if (!known) {

@@ -4,20 +4,33 @@ const Order = require('../models/Order');
 const { PRODUCT_STATUS } = require('../models/Product');
 const ApiError = require('../utils/ApiError');
 const { escapeRegex, isDuplicateKey } = require('../utils/helpers');
+const { inTransaction } = require('../utils/transaction');
 const categoryService = require('./category.service');
 
 const dupSku = () => ApiError.conflict('A product with this SKU already exists', { code: 'DUPLICATE_SKU' });
 
-async function assertAssignableCategory(categoryId) {
-  const cat = await Category.findById(categoryId);
+// Upper bound for a search query (regex scans are not indexable); a runaway scan is aborted by the server.
+const SEARCH_MAX_TIME_MS = 5000;
+
+/**
+ * Validates the category AND touches it inside the caller's transaction. The touch makes this
+ * assignment conflict with a concurrent delete / deactivate / move of the same category, so a product
+ * can never be committed against a category that was removed at the same moment.
+ */
+async function assertAndLockCategory(categoryId, session) {
+  const cat = await Category.findById(categoryId).session(session);
   if (!cat) throw ApiError.unprocessable('Category does not exist', { code: 'INVALID_CATEGORY' });
   if (!cat.isActive) throw ApiError.unprocessable('Category is inactive', { code: 'INACTIVE_CATEGORY' });
+  await Category.updateOne({ _id: cat._id }, { $inc: { rev: 1 } }, { session });
 }
 
 async function create(data) {
-  await assertAssignableCategory(data.category);
   try {
-    return await Product.create(data);
+    return await inTransaction(async (session) => {
+      await assertAndLockCategory(data.category, session);
+      const [product] = await Product.create([data], { session });
+      return product;
+    });
   } catch (err) {
     if (isDuplicateKey(err)) throw dupSku();
     throw err;
@@ -26,14 +39,16 @@ async function create(data) {
 
 // Loaded + saved (not findOneAndUpdate) so the pre-validate hook keeps effectivePrice correct.
 async function update(id, changes) {
-  const product = await Product.findById(id);
-  if (!product) throw ApiError.notFound('Product not found');
-  if (changes.category && String(changes.category) !== String(product.category)) {
-    await assertAssignableCategory(changes.category);
-  }
-  product.set(changes);
   try {
-    return await product.save();
+    return await inTransaction(async (session) => {
+      const product = await Product.findById(id).session(session);
+      if (!product) throw ApiError.notFound('Product not found');
+      if (changes.category && String(changes.category) !== String(product.category)) {
+        await assertAndLockCategory(changes.category, session);
+      }
+      product.set(changes);
+      return product.save({ session });
+    });
   } catch (err) {
     if (isDuplicateKey(err)) throw dupSku();
     throw err;
@@ -82,14 +97,17 @@ async function list(query, viewer) {
   const dir = order === 'asc' ? 1 : -1;
   const sort = { [sortField]: dir, _id: dir }; // _id tiebreaker keeps pagination stable
 
-  const [items, total] = await Promise.all([
-    Product.find(filter)
-      .sort(sort)
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .populate('category', 'name slug'),
-    Product.countDocuments(filter),
-  ]);
+  const find = Product.find(filter)
+    .sort(sort)
+    .skip((page - 1) * limit)
+    .limit(limit)
+    .populate('category', 'name slug');
+  const count = Product.countDocuments(filter);
+  if (search) {
+    find.maxTimeMS(SEARCH_MAX_TIME_MS);
+    count.maxTimeMS(SEARCH_MAX_TIME_MS);
+  }
+  const [items, total] = await Promise.all([find, count]);
   return { items, total };
 }
 
@@ -102,18 +120,25 @@ async function getById(id, viewer) {
   return product;
 }
 
-/** Hard delete when never ordered; otherwise deactivate so order history stays intact. */
+/**
+ * Hard delete when never ordered; otherwise deactivate so order history stays intact.
+ * Runs in one transaction and writes the product document either way, so it CONFLICTS with a
+ * concurrent order (which decrements this product's stock): the loser re-checks. A product can
+ * therefore not be hard-deleted in the same instant an order for it commits.
+ */
 async function remove(id) {
-  const product = await Product.findById(id);
-  if (!product) throw ApiError.notFound('Product not found');
-  const ordered = await Order.exists({ 'items.product': product._id });
-  if (ordered) {
-    product.status = PRODUCT_STATUS.INACTIVE;
-    await product.save();
-    return { deleted: false, deactivated: true };
-  }
-  await Product.deleteOne({ _id: product._id });
-  return { deleted: true, deactivated: false };
+  return inTransaction(async (session) => {
+    const product = await Product.findById(id).session(session);
+    if (!product) throw ApiError.notFound('Product not found');
+    const ordered = await Order.exists({ 'items.product': product._id }).session(session);
+    if (ordered) {
+      product.status = PRODUCT_STATUS.INACTIVE;
+      await product.save({ session });
+      return { deleted: false, deactivated: true };
+    }
+    await Product.deleteOne({ _id: product._id }, { session });
+    return { deleted: true, deactivated: false };
+  });
 }
 
 module.exports = { create, update, list, getById, remove };

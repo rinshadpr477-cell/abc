@@ -32,20 +32,48 @@ The two secrets must differ and be ≥ 32 characters; the API refuses to start o
 
 ### Refresh-token rotation (`POST /auth/refresh`)
 
-1. The `jti` of every issued refresh token is stored (SHA-256 hashed) in `users.sessions` (max 5 devices).
-2. Refresh verifies the cookie, then atomically **removes** that `jti` from the user (`findOneAndUpdate … $pull`) and issues a fresh access + refresh pair with a new `jti`.
-3. If the `jti` is not found (already used, logged out or revoked) the token is treated as stolen: **all** the user's sessions are cleared and the API answers `401 REFRESH_REUSED`; the cookie is cleared.
-4. Deactivated accounts cannot refresh (`403`).
+Each login (device) starts a **token family** with its own id (`fid`, embedded in every refresh token of that login). `users.sessions` holds one entry per family (max 5): the SHA-256 hash of the **current** token id, a short list of recently rotated ids (`previous`) and the expiry. Token values are never stored.
+
+1. **Normal refresh:** the presented id matches the family's current id. It is rotated with a compare-and-swap on the stored hash (two requests can never both consume the same id), a new refresh token is issued, and the old id is remembered in `previous`.
+2. **Grace period (`REFRESH_GRACE_SECONDS`, default 10):** a *previous* id presented within the grace window is accepted and rotated again. This covers two tabs refreshing at the same moment and a response lost on the network (the client retries with the old cookie). Every token issued this way stays usable inside its own grace window, so whichever `Set-Cookie` the browser kept still works.
+3. **Reuse after the grace period = theft:** a previous id presented *after* the window (or an id the family never had) revokes **that family only** and answers `401 REFRESH_REUSED`. Other devices stay signed in; the revoked device must sign in again.
+4. **Unknown family** (logged out, revoked, password changed, expired) gives a plain `401 REFRESH_INVALID`. Nothing else is revoked, so replaying a logged-out token cannot sign anyone out.
+5. Deactivated accounts cannot refresh (`403`). Tokens issued before families existed (no `fid`) are rejected, so affected users sign in once after upgrading.
+
+`REFRESH_GRACE_SECONDS=0` disables the grace period (strict single use). `auth.refresh.test.js` demonstrates the grace behaviour, that it ends after the window, and that theft detection still revokes the affected family.
 
 ### Logout, password change, deactivation
 
-* `POST /auth/logout` removes the presented refresh `jti` and clears the cookie (already-expired tokens are still revoked).
+* `POST /auth/logout` removes the presented token's **family** and clears the cookie (already-expired tokens are still revoked); other devices are unaffected.
 * `PATCH /auth/change-password` verifies the current password, sets the new one, **clears every session** (other devices are signed out) and returns a fresh token pair for the caller.
 * An admin deactivating a customer clears that customer's sessions; their existing access token stops working on the next request.
 
+## Rate limits
+
+Per client IP, 15-minute windows, all configurable (see `backend/.env.example`):
+
+| Limiter | Applies to | Default |
+|---|---|---|
+| API | every `/api/v1` request | 600 |
+| Auth | `POST /auth/login`, `POST /auth/register` | 30 |
+| Refresh (IP) | `POST /auth/refresh` | 120 |
+| Refresh (token) | `POST /auth/refresh`, keyed by a hash of the refresh cookie (no client-supplied identifier is trusted) | 30 |
+
+The refresh limits are separate from the login limits, so normal page reloads and several tabs do not interfere with logging in, and a login brute-force does not stop sessions from refreshing. A throttled request gets `429` with `{ success:false, code:"RATE_LIMITED", message }` and nothing else (no tokens, cookies or session data). Limiting is off under `NODE_ENV=test` unless `RATE_LIMIT_ENABLED=true`.
+
+## Production secret validation
+
+With `NODE_ENV=production` the API refuses to start if `JWT_ACCESS_SECRET` or `JWT_REFRESH_SECRET` is shorter than 32 characters, identical to the other, one of the public example values from `.env.example`, starts with a placeholder prefix (`change-me`, `your-`, `secret`, `password`, `test-`, …), contains placeholder wording (`example`, `placeholder`, …) or has fewer than 12 distinct characters. Error messages name the setting and the reason only; values are never printed. Generate each secret with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+```
+
+Development accepts the example values so local setup stays simple.
+
 ## Hardening summary
 
-helmet headers; CORS allow-list (`CORS_ORIGIN`, comma separated) with credentials; rate limits (600/15 min general, 30/15 min on register/login/refresh; disabled only when `NODE_ENV=test`); 100 kB body limit; `$`/`.` keys stripped from bodies and params; flat-string query parser plus zod coercion; escaped regex searches; central error handler without stack traces in responses.
+helmet headers; CORS allow-list (`CORS_ORIGIN`, comma separated, exact match) with credentials; rate limits (see above); 100 kB body limit; `$`/`.` keys stripped from bodies and params; flat-string query parser plus zod coercion; escaped regex searches; central error handler without stack traces in responses.
 
 ## Verified by automated tests
 

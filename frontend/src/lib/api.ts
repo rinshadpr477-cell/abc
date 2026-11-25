@@ -1,6 +1,7 @@
 import axios, { AxiosError, type AxiosRequestConfig, type InternalAxiosRequestConfig } from 'axios';
 import { toast } from 'sonner';
 import { useAuthStore } from '@/stores/auth.store';
+import type { SessionReason } from '@/lib/session-notice';
 import { queryClient } from '@/lib/query-client';
 import type { AuthPayload, Envelope, Paged } from '@/types';
 
@@ -86,15 +87,16 @@ export function refreshSession(): Promise<AuthPayload | null> {
   return refreshing;
 }
 
-export function sessionExpired(message = 'Your session has expired. Please sign in again.') {
+export function sessionExpired(message = 'Your session has expired. Please sign in again.', reason: SessionReason = 'expired') {
   const hadSession = !!useAuthStore.getState().token;
   useAuthStore.getState().clear();
   queryClient.clear();
   if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
     if (hadSession) toast.error(message);
     const next = encodeURIComponent(window.location.pathname + window.location.search);
+    // The toast above is lost by the reload, so the login page shows the reason from the URL.
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- outside React; full reload clears memory state
-    window.location.assign(`/login?next=${next}`); // full reload on purpose: drops all in-memory state
+    window.location.assign(`/login?next=${next}&reason=${reason}`); // full reload on purpose: drops all in-memory state
   }
 }
 
@@ -137,7 +139,7 @@ api.interceptors.response.use(
 
     // Account deactivated while signed in.
     if (status === 403 && code === 'ACCOUNT_INACTIVE' && hadToken) {
-      sessionExpired('Your account has been deactivated.');
+      sessionExpired('Your account has been deactivated.', 'deactivated');
       return Promise.reject(normalise(error));
     }
 

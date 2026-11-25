@@ -11,6 +11,9 @@ const cookieOptions = () => ({
   path: '/api/v1/auth',
   maxAge: env.REFRESH_TOKEN_TTL_DAYS * 86400000,
 });
+// Exported for tests (cookie flags are security-relevant).
+exports.cookieOptions = cookieOptions;
+
 const clearOptions = () => {
   const { maxAge, ...rest } = cookieOptions();
   return rest;

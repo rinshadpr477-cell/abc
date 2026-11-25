@@ -15,6 +15,9 @@ const categorySchema = new mongoose.Schema(
     ancestors: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Category' }], default: [] },
     level: { type: Number, default: 0, min: 0 },
     isActive: { type: Boolean, default: true },
+    // Bumped inside transactions that depend on this category (child create, move target, product assignment)
+    // so that a concurrent delete/move/deactivate CONFLICTS instead of both passing their checks (write skew).
+    rev: { type: Number, default: 0 },
   },
   {
     timestamps: true,
@@ -23,6 +26,7 @@ const categorySchema = new mongoose.Schema(
         ret.id = String(ret._id);
         delete ret._id;
         delete ret.__v;
+        delete ret.rev;
         return ret;
       },
     },

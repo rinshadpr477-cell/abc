@@ -11,7 +11,8 @@ import { OrderStatusBadge, PageHeader } from '@/components/common';
 import { RequireRole } from '@/components/auth/guards';
 import { useCartProducts } from '@/hooks/use-cart-products';
 import { ApiError } from '@/lib/api';
-import { money, newIdempotencyKey } from '@/lib/utils';
+import { money } from '@/lib/utils';
+import { keyForCart, type KeyHolder } from '@/lib/checkout-key';
 import { orderService } from '@/services';
 import { useCartStore } from '@/stores/cart.store';
 import type { Order } from '@/types';
@@ -24,7 +25,7 @@ function Checkout() {
   const [error, setError] = useState<string | null>(null);
   const [placed, setPlaced] = useState<Order | null>(null);
   // One idempotency key per distinct cart; reused on retries so a double-click can never create two orders.
-  const keyRef = useRef<{ sig: string; key: string } | null>(null);
+  const keyRef = useRef<KeyHolder | null>(null);
 
   if (placed) {
     return (
@@ -59,8 +60,7 @@ function Checkout() {
     setError(null);
     setPlacing(true);
     const items = rows.map((r) => ({ productId: r.productId, quantity: r.quantity })); // ids + quantities only
-    const sig = JSON.stringify(items);
-    if (!keyRef.current || keyRef.current.sig !== sig) keyRef.current = { sig, key: newIdempotencyKey() };
+    keyRef.current = keyForCart(keyRef.current, items);
     try {
       const order = await orderService.place(items, keyRef.current.key);
       keyRef.current = null;

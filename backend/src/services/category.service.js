@@ -3,6 +3,7 @@ const Category = require('../models/Category');
 const Product = require('../models/Product');
 const ApiError = require('../utils/ApiError');
 const { escapeRegex, slugify, isDuplicateKey } = require('../utils/helpers');
+const { inTransaction } = require('../utils/transaction');
 
 const dupSlug = () =>
   ApiError.conflict('A sibling category with this name already exists', { code: 'DUPLICATE_CATEGORY' });
@@ -21,22 +22,23 @@ async function loadParent(parentId, session) {
 }
 
 async function create({ name, description = '', parent = null, isActive = true }) {
-  let ancestors = [];
-  let level = 0;
-  if (parent) {
-    const p = await loadParent(parent);
-    ancestors = [...p.ancestors, p._id];
-    level = ancestors.length;
-  }
   try {
-    return await Category.create({
-      name,
-      slug: slugify(name) || 'category',
-      description,
-      parent,
-      ancestors,
-      level,
-      isActive,
+    // Transactional so that creating a child CONFLICTS with a concurrent delete/move/deactivate of the
+    // parent (the parent document is touched), instead of leaving a child under a missing parent.
+    return await inTransaction(async (session) => {
+      let ancestors = [];
+      let level = 0;
+      if (parent) {
+        const p = await loadParent(parent, session);
+        await Category.updateOne({ _id: p._id }, { $inc: { rev: 1 } }, { session });
+        ancestors = [...p.ancestors, p._id];
+        level = ancestors.length;
+      }
+      const [created] = await Category.create(
+        [{ name, slug: slugify(name) || 'category', description, parent, ancestors, level, isActive }],
+        { session }
+      );
+      return created;
     });
   } catch (err) {
     if (isDuplicateKey(err)) throw dupSlug();
@@ -50,13 +52,16 @@ async function list({ page, limit, search, parent, isActive }) {
   if (parent === 'root') filter.parent = null;
   else if (parent) filter.parent = parent;
   if (search) filter.name = new RegExp(escapeRegex(search), 'i');
-  const [items, total] = await Promise.all([
-    Category.find(filter)
-      .sort({ level: 1, name: 1 })
-      .skip((page - 1) * limit)
-      .limit(limit),
-    Category.countDocuments(filter),
-  ]);
+  const find = Category.find(filter)
+    .sort({ level: 1, name: 1 })
+    .skip((page - 1) * limit)
+    .limit(limit);
+  const count = Category.countDocuments(filter);
+  if (search) {
+    find.maxTimeMS(5000);
+    count.maxTimeMS(5000);
+  }
+  const [items, total] = await Promise.all([find, count]);
   return { items, total };
 }
 
@@ -141,6 +146,11 @@ async function update(id, changes) {
               code: 'CIRCULAR_PARENT',
             });
           }
+          // Write-skew guard: two concurrent moves (A under B, B under A) each read the other's OLD
+          // position and would both pass the check above. Touching the new parent makes any pair of
+          // opposing moves write the same documents, so one transaction aborts and is retried; on retry
+          // it sees the committed move and the cycle check rejects it.
+          await Category.updateOne({ _id: p._id }, { $inc: { rev: 1 } }, { session });
           newAncestors = [...p.ancestors, p._id];
           cat.parent = p._id;
         } else {
@@ -191,26 +201,33 @@ async function update(id, changes) {
   }
 }
 
-/** Hard delete only for an empty leaf. Otherwise the caller is told to deactivate instead. */
+/**
+ * Hard delete only for an empty leaf. Otherwise the caller is told to deactivate instead.
+ * The emptiness check and the delete run in one transaction; creating a child or assigning a product
+ * touches this document (see create / product service), so a concurrent insert CONFLICTS with the
+ * delete and the loser re-checks, rather than leaving an orphan behind a deleted category.
+ */
 async function remove(id) {
-  const cat = await getOrThrow(id);
-  const [children, products] = await Promise.all([
-    Category.countDocuments({ parent: cat._id }),
-    Product.countDocuments({ category: cat._id }),
-  ]);
-  if (children > 0) {
-    throw ApiError.conflict(
-      `Category has ${children} sub-categor${children === 1 ? 'y' : 'ies'}. Move or delete them first, or deactivate this category.`,
-      { code: 'CATEGORY_HAS_CHILDREN' }
-    );
-  }
-  if (products > 0) {
-    throw ApiError.conflict(
-      `Category has ${products} product${products === 1 ? '' : 's'}. Reassign them first, or deactivate this category.`,
-      { code: 'CATEGORY_HAS_PRODUCTS' }
-    );
-  }
-  await Category.deleteOne({ _id: cat._id });
+  await inTransaction(async (session) => {
+    const cat = await getOrThrow(id, session);
+    const [children, products] = await Promise.all([
+      Category.countDocuments({ parent: cat._id }).session(session),
+      Product.countDocuments({ category: cat._id }).session(session),
+    ]);
+    if (children > 0) {
+      throw ApiError.conflict(
+        `Category has ${children} sub-categor${children === 1 ? 'y' : 'ies'}. Move or delete them first, or deactivate this category.`,
+        { code: 'CATEGORY_HAS_CHILDREN' }
+      );
+    }
+    if (products > 0) {
+      throw ApiError.conflict(
+        `Category has ${products} product${products === 1 ? '' : 's'}. Reassign them first, or deactivate this category.`,
+        { code: 'CATEGORY_HAS_PRODUCTS' }
+      );
+    }
+    await Category.deleteOne({ _id: cat._id }, { session });
+  });
 }
 
 module.exports = {

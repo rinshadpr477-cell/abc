@@ -7,9 +7,12 @@ const User = require('../models/User');
 const { ORDER_STATUS } = require('../models/Order');
 const { PRODUCT_STATUS } = require('../models/Product');
 const ApiError = require('../utils/ApiError');
-const { escapeRegex, isDuplicateKey } = require('../utils/helpers');
+const { escapeRegex, isDuplicateKey, sha256 } = require('../utils/helpers');
 
 const S = ORDER_STATUS;
+
+const CUSTOMER_SEARCH_CAP = 200;
+const SEARCH_MAX_TIME_MS = 5000;
 
 /** Forward workflow. CANCELLED is reachable only through the cancellation rules below. */
 const TRANSITIONS = Object.freeze({
@@ -49,18 +52,32 @@ async function explainStockFailure(productId, quantity, session) {
   });
 }
 
+/** Same key + same cart returns the original order; same key + different cart is a client error. */
+function replayFor(existing, idempotencyHash) {
+  // Orders stored before the hash existed have none; they are treated as a match.
+  if (existing.idempotencyHash && existing.idempotencyHash !== idempotencyHash) {
+    throw ApiError.conflict('This Idempotency-Key was already used with a different order. Use a new key for a new order.', {
+      code: 'IDEMPOTENCY_KEY_REUSED',
+    });
+  }
+  return { order: existing, replayed: true };
+}
+
 async function placeOrder(customerId, rawItems, idempotencyKey) {
-  // Merge duplicate lines for the same product.
+  // Merge duplicate lines for the same product (ids compared case-insensitively).
   const wanted = new Map();
   for (const { productId, quantity } of rawItems) {
-    wanted.set(productId, (wanted.get(productId) || 0) + quantity);
+    const id = productId.toLowerCase();
+    wanted.set(id, (wanted.get(id) || 0) + quantity);
   }
   // Deterministic order avoids lock-order deadlocks between concurrent multi-product orders.
   const lines = [...wanted.entries()].sort(([a], [b]) => a.localeCompare(b));
+  // Fingerprint of the normalised cart (order of lines and duplicate lines do not matter).
+  const idempotencyHash = sha256(lines.map(([id, qty]) => id + ':' + qty).join('|'));
 
   if (idempotencyKey) {
     const existing = await Order.findOne({ customer: customerId, idempotencyKey });
-    if (existing) return { order: existing, replayed: true };
+    if (existing) return replayFor(existing, idempotencyHash);
   }
 
   const session = await mongoose.startSession();
@@ -102,6 +119,7 @@ async function placeOrder(customerId, rawItems, idempotencyKey) {
             orderNumber: newOrderNumber(),
             customer: customerId,
             idempotencyKey,
+            idempotencyHash: idempotencyKey ? idempotencyHash : undefined,
             items,
             subtotal,
             total: subtotal,
@@ -119,7 +137,7 @@ async function placeOrder(customerId, rawItems, idempotencyKey) {
     // decrement) rolled back; return the winner's order.
     if (idempotencyKey && isDuplicateKey(err, 'idempotencyKey')) {
       const existing = await Order.findOne({ customer: customerId, idempotencyKey });
-      if (existing) return { order: existing, replayed: true };
+      if (existing) return replayFor(existing, idempotencyHash);
     }
     throw err;
   } finally {
@@ -141,18 +159,32 @@ async function listAll({ page, limit, status, search }) {
   const filter = {};
   if (status) filter.status = status;
   if (search) {
-    const rx = new RegExp(escapeRegex(search), 'i');
-    const users = await User.find({ $or: [{ name: rx }, { email: rx }] }, { _id: 1 }).lean();
-    filter.$or = [{ orderNumber: rx }, { customer: { $in: users.map((u) => u._id) } }];
+    if (/^ord-/i.test(search)) {
+      // Looks like an order number: anchored prefix match, served by the unique orderNumber index.
+      filter.orderNumber = new RegExp('^' + escapeRegex(search), 'i');
+    } else {
+      const rx = new RegExp(escapeRegex(search), 'i');
+      // Bounded pre-lookup: at most CUSTOMER_SEARCH_CAP (most recent) matching customers are considered,
+      // so a broad term cannot load every user into memory. Refine the search to narrow further.
+      const users = await User.find({ $or: [{ name: rx }, { email: rx }] }, { _id: 1 })
+        .sort({ createdAt: -1 })
+        .limit(CUSTOMER_SEARCH_CAP)
+        .maxTimeMS(SEARCH_MAX_TIME_MS)
+        .lean();
+      filter.$or = [{ orderNumber: rx }, { customer: { $in: users.map((u) => u._id) } }];
+    }
   }
-  const [items, total] = await Promise.all([
-    Order.find(filter)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .populate('customer', 'name email'),
-    Order.countDocuments(filter),
-  ]);
+  const find = Order.find(filter)
+    .sort({ createdAt: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit)
+    .populate('customer', 'name email');
+  const count = Order.countDocuments(filter);
+  if (search) {
+    find.maxTimeMS(SEARCH_MAX_TIME_MS);
+    count.maxTimeMS(SEARCH_MAX_TIME_MS);
+  }
+  const [items, total] = await Promise.all([find, count]);
   return { items, total };
 }
 

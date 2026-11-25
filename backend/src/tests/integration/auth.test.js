@@ -82,7 +82,8 @@ describe('Auth', () => {
     expect((await h.http().post('/api/v1/auth/login').send({ email: c.email, password: 'NewPassw0rd!' })).status).toBe(200);
   });
 
-  test('refresh rotates the token and a replayed (old) refresh token revokes the session', async () => {
+  // Detailed rotation / grace-period / theft-detection coverage lives in auth.refresh.test.js.
+  test('refresh issues a new access token and rotates the refresh cookie', async () => {
     const c = await h.registerCustomer();
     const cookie1 = c.cookies.map((x) => x.split(';')[0]).join('; ');
     const r1 = await h.http().post('/api/v1/auth/refresh').set('Cookie', cookie1);
@@ -90,12 +91,6 @@ describe('Auth', () => {
     expect(r1.body.data.accessToken).toBeTruthy();
     const cookie2 = r1.headers['set-cookie'].map((x) => x.split(';')[0]).join('; ');
     expect(cookie2).not.toBe(cookie1);
-
-    const replay = await h.http().post('/api/v1/auth/refresh').set('Cookie', cookie1);
-    expect(replay.status).toBe(401);
-    // reuse detection revoked everything, including the newest token
-    const after = await h.http().post('/api/v1/auth/refresh').set('Cookie', cookie2);
-    expect(after.status).toBe(401);
   });
 
   test('admin can list/search/filter users and cannot deactivate admins or self', async () => {

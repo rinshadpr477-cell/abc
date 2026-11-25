@@ -10,7 +10,7 @@
     "seed:admin": "node scripts/seed-admin.js",
     "seed:demo": "node scripts/seed-demo.js",
     "test": "vitest run",
-    "lint": "eslint src scripts",
+    "lint": "eslint src scripts vitest.config.js eslint.config.js",
     "test:watch": "vitest"
   },
   "license": "ISC",
@@ -30,6 +30,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "eslint": "^10.15.0",
     "mongodb-memory-server": "^11.4.0",
     "nodemon": "^3.1.14",

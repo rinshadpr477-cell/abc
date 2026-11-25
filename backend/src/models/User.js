@@ -10,9 +10,21 @@ const userSchema = new mongoose.Schema(
     password: { type: String, required: true, select: false },
     role: { type: String, enum: Object.values(ROLES), default: ROLES.CUSTOMER, index: true },
     isActive: { type: Boolean, default: true, index: true },
-    // Hashed jti of each live refresh token (rotation + revocation). Never serialised.
+    // One entry per login (device) = one refresh-token FAMILY. Never serialised.
+    //  - fid: family id, embedded in every refresh token of that login
+    //  - jtiHash: SHA-256 of the CURRENT token id (token values themselves are never stored)
+    //  - previous: recently rotated ids, kept only for the short grace period so concurrent
+    //    refreshes / a lost response do not look like token theft
     sessions: {
-      type: [{ _id: false, jtiHash: String, expiresAt: Date }],
+      type: [
+        {
+          _id: false,
+          fid: { type: String, required: true },
+          jtiHash: { type: String, required: true },
+          expiresAt: { type: Date, required: true },
+          previous: { type: [{ _id: false, jtiHash: String, rotatedAt: Date }], default: [] },
+        },
+      ],
       select: false,
       default: [],
     },

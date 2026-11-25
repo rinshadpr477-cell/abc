@@ -6,7 +6,8 @@
     "build": "next build",
     "start": "next start -p 3100",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.2",
@@ -44,6 +45,7 @@
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.2.9",
     "tailwindcss": "^4.3.5",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
   }
 }

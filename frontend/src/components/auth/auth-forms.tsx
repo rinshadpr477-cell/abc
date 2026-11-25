@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -14,6 +14,7 @@ import { AuthShell } from '@/components/auth/auth-shell';
 import { ApiError } from '@/lib/api';
 import { authService } from '@/services';
 import { useAuthStore } from '@/stores/auth.store';
+import { sessionNotice } from '@/lib/session-notice';
 
 const email = z.string().trim().email('Enter a valid email address');
 const password = z
@@ -53,6 +54,12 @@ export function LoginForm() {
     defaultValues: { email: '', password: '' },
   });
   const { errors, isSubmitting } = form.formState;
+
+  // Arriving from an ended session (`?reason=expired|deactivated`): say why. Unknown values are ignored.
+  useEffect(() => {
+    const message = sessionNotice(new URLSearchParams(window.location.search).get('reason'));
+    if (message) toast.info(message, { id: 'session-notice', duration: 8000 });
+  }, []);
 
   const onSubmit = form.handleSubmit(async (values) => {
     setFormError(null);

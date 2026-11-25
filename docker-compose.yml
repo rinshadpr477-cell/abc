@@ -1,11 +1,19 @@
 # MongoDB as a single-node replica set (required for multi-document transactions).
+#
+# This base file is the "no database authentication" setup. The published port is bound to
+# loopback ONLY, so the database is reachable from this machine but never from the network.
+#
+# To enable database authentication (recommended), also use docker-compose.auth.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.auth.yml up -d
+# See docs/SETUP_AND_INSTALLATION.md (fresh install and existing-volume steps).
 services:
   mongo:
     image: mongo:7
-    container_name: abc-ecommerce-mongo
+    container_name: ${MONGO_CONTAINER_NAME:-ecommerce-mongo}
     command: ["--replSet", "rs0", "--bind_ip_all"]
     ports:
-      - "27017:27017"
+      # Loopback only. Never publish 27017 on 0.0.0.0.
+      - "127.0.0.1:${MONGO_HOST_PORT:-27017}:27017"
     volumes:
       - mongo-data:/data/db
     healthcheck:

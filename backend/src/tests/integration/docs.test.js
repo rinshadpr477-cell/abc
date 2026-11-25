@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const path = require('path');
 const h = require('../helpers');
@@ -26,12 +27,14 @@ describe('API docs (Swagger)', () => {
 });
 
 describe('Production configuration guard', () => {
+  // Strong random secrets generated per run (never real credentials, never committed).
   const baseEnv = {
     PATH: process.env.PATH,
     NODE_ENV: 'production',
-    JWT_ACCESS_SECRET: 'a'.repeat(40),
-    JWT_REFRESH_SECRET: 'b'.repeat(40),
-    MONGODB_URI: 'mongodb+srv://user:pw@cluster.example.mongodb.net/abc',
+    JWT_ACCESS_SECRET: crypto.randomBytes(32).toString('hex'),
+    JWT_REFRESH_SECRET: crypto.randomBytes(32).toString('hex'),
+    // Obviously non-secret placeholder host (.invalid is a reserved TLD); no credentials.
+    MONGODB_URI: 'mongodb://mongo.internal.invalid:27017/abc',
     CORS_ORIGIN: 'https://admin.example.com',
   };
   const load = (extra) =>
@@ -84,7 +87,7 @@ describe('Production configuration guard', () => {
       stdio: ['ignore', 'pipe', 'pipe'],
     }).toString();
     expect(JSON.parse(out.trim().split('\n').pop())).toEqual({
-      jsonNone: 401, jsonWrong: 401, jsonOk: 200, uiNone: 401, uiOk: 200, health: 200, server: 'https://api.example.com/api/v1',
+      jsonNone: 401, jsonWrong: 401, jsonOk: 200, uiNone: 401, uiOk: 200, health: 503 /* reachable without docs credentials; 503 because this child has no database */, server: 'https://api.example.com/api/v1',
     });
   });
 

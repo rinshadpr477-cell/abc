@@ -37,6 +37,8 @@ const orderSchema = new mongoose.Schema(
     orderNumber: { type: String, required: true, unique: true },
     customer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     idempotencyKey: { type: String, maxlength: 128 },
+    // SHA-256 of the normalised items the key was first used with; a reused key with a different cart is rejected.
+    idempotencyHash: { type: String, maxlength: 64 },
     items: { type: [itemSchema], validate: (v) => v.length > 0 },
     subtotal: { type: Number, required: true, min: 0 },
     total: { type: Number, required: true, min: 0 },
@@ -53,6 +55,7 @@ const orderSchema = new mongoose.Schema(
         delete ret._id;
         delete ret.__v;
         delete ret.idempotencyKey;
+        delete ret.idempotencyHash;
         delete ret.stockRestored;
         return ret;
       },

@@ -12,7 +12,7 @@ MongoDB database `ecommerce` (set by `MONGODB_URI`), accessed through Mongoose 9
 | `password` | String | bcrypt hash, `select: false`, never serialised |
 | `role` | `ADMIN` \| `CUSTOMER` | default `CUSTOMER`; only settable by the seed script |
 | `isActive` | Boolean | default `true` |
-| `sessions` | `[{ jtiHash, expiresAt }]` | hashed ids of live refresh tokens (max 5 kept), `select: false`, never serialised |
+| `sessions` | `[{ fid, jtiHash, expiresAt, previous: [{ jtiHash, rotatedAt }] }]` | one entry per login = one refresh-token family (max 5 kept): the family id, the SHA-256 of the **current** token id, and recently rotated ids honoured only during the grace period. Token values are never stored. `select: false`, never serialised |
 | `createdAt`, `updatedAt` | Date | |
 
 Indexes: unique `email`; `role`; `isActive`.
@@ -28,6 +28,7 @@ Indexes: unique `email`; `role`; `isActive`.
 | `ancestors` | `[ObjectId]` | materialised path, root → direct parent |
 | `level` | Number | derived: `ancestors.length` (root = 0) |
 | `isActive` | Boolean | default `true` |
+| `rev` | Number | internal counter bumped inside transactions that depend on the category (creating a child, moving something under it, assigning a product to it). It makes a concurrent delete / move / deactivate **conflict** instead of both passing their checks. Never serialised |
 
 Indexes: **unique `(parent, slug)`** (sibling names are unique, same name allowed under different parents); multikey **`ancestors`**.
 
@@ -38,7 +39,8 @@ Adjacency (`parent`) plus a materialised path (`ancestors`), no depth limit.
 * **Descendants** of X: `find({ ancestors: X })` — one indexed query at any depth. Used for the admin descendants endpoint and for product filtering (`category ∈ {X} ∪ descendants`).
 * **Tree**: one query for all categories, nested in memory via an id→node map (no per-node queries).
 * **Create**: `ancestors = parent.ancestors + [parent]`; parent must exist and be active.
-* **Move** (`PATCH parent`) inside a transaction: reject `parent == self` (`SELF_PARENT`) and any new parent whose `ancestors` contain the node (`CIRCULAR_PARENT`); then rewrite `ancestors`/`level` of the node and its whole subtree with one `bulkWrite`.
+* **Move** (`PATCH parent`) inside a transaction: reject `parent == self` (`SELF_PARENT`) and any new parent whose `ancestors` contain the node (`CIRCULAR_PARENT`); then rewrite `ancestors`/`level` of the node and its whole subtree with one `bulkWrite`. The new parent is also written to (`rev`), so two concurrent opposing moves (A under B and B under A) write the same documents: one transaction conflicts and is retried, and on retry the cycle check rejects it. At most one of two incompatible moves can succeed.
+* **Create child / delete / assign product** are transactional for the same reason: deleting a category re-checks "no children, no products" inside the transaction, and creating a child or assigning a product touches the category, so a concurrent insert cannot slip in beside the delete and leave an orphan.
 * **Deactivate** cascades to every descendant; **activate** requires an active parent. **Delete** only empty leaves (no children, no products).
 
 ## `products`
@@ -56,7 +58,7 @@ Adjacency (`parent`) plus a materialised path (`ancestors`), no depth limit.
 | `category` | ObjectId → `categories` | required; must reference an active category on create/move |
 | `status` | `ACTIVE` \| `INACTIVE` | default `ACTIVE` |
 
-Indexes: unique `sku`; `(category, status)`; `(status, effectivePrice)`; `createdAt`; `name`. Text search is a case-insensitive regex (escaped) on `name` and `sku`.
+Indexes: unique `sku`; `(category, status)`; `(status, effectivePrice)`; `createdAt`; `name`. Search is a case-insensitive, regex-escaped **substring** match on `name` and `sku` (max 100 characters). Unanchored substring regexes cannot use an index, so these queries scan the collection; they are bounded by a 5-second server-side `maxTimeMS`. See "Known limitations" in the README.
 
 ## `orders`
 
@@ -65,6 +67,7 @@ Indexes: unique `sku`; `(category, status)`; `(status, effectivePrice)`; `create
 | `orderNumber` | String | **unique**, `ORD-YYYYMMDD-XXXXXXXX` |
 | `customer` | ObjectId → `users` | |
 | `idempotencyKey` | String | optional, never serialised |
+| `idempotencyHash` | String | SHA-256 of the normalised cart (product ids + quantities) the key was first used with; a reused key with a different cart is rejected. Never serialised |
 | `items[]` | `{ product, name, sku, unitPrice, quantity, lineTotal }` | name/SKU/price **snapshots** taken in the transaction |
 | `subtotal`, `total` | Number | computed by the API (`total = subtotal`) |
 | `status` | `PENDING`, `CONFIRMED`, `PROCESSING`, `SHIPPED`, `DELIVERED`, `CANCELLED` | default `PENDING` |

@@ -3,6 +3,8 @@ const { ROLES } = require('../models/User');
 const ApiError = require('../utils/ApiError');
 const { escapeRegex } = require('../utils/helpers');
 
+const SEARCH_MAX_TIME_MS = 5000;
+
 async function list({ page, limit, search, role, isActive }) {
   const filter = {};
   if (role) filter.role = role;
@@ -11,10 +13,14 @@ async function list({ page, limit, search, role, isActive }) {
     const rx = new RegExp(escapeRegex(search), 'i');
     filter.$or = [{ name: rx }, { email: rx }];
   }
-  const [items, total] = await Promise.all([
-    User.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),
-    User.countDocuments(filter),
-  ]);
+  const find = User.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit);
+  const count = User.countDocuments(filter);
+  if (search) {
+    // Substring regex search cannot use an index; bound the worst case instead.
+    find.maxTimeMS(SEARCH_MAX_TIME_MS);
+    count.maxTimeMS(SEARCH_MAX_TIME_MS);
+  }
+  const [items, total] = await Promise.all([find, count]);
   return { items, total };
 }
 

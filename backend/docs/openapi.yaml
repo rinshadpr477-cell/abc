@@ -360,7 +360,7 @@ paths:
       tags: [Orders]
       summary: Place an order (CUSTOMER). One MongoDB transaction decrements stock atomically and creates the order.
       parameters:
-        - { name: Idempotency-Key, in: header, description: Same key + customer returns the original order (200) instead of creating another, schema: { type: string, minLength: 8, maxLength: 128 } }
+        - { name: Idempotency-Key, in: header, description: 'Same key + customer + same cart returns the original order (200) instead of creating another; the same key with a different cart is rejected with 409', schema: { type: string, minLength: 8, maxLength: 128 } }
       requestBody:
         required: true
         content:
@@ -377,7 +377,7 @@ paths:
       responses:
         '201': { description: Order placed, content: { application/json: { schema: { $ref: '#/components/schemas/Order' } } } }
         '200': { description: Idempotent replay }
-        '409': { description: INSUFFICIENT_STOCK }
+        '409': { description: 'INSUFFICIENT_STOCK, or IDEMPOTENCY_KEY_REUSED when the Idempotency-Key was already used with a different cart' }
         '422': { description: PRODUCT_UNAVAILABLE / PRODUCT_NOT_FOUND / validation (client-sent prices are rejected) }
   /orders/my-orders:
     get:

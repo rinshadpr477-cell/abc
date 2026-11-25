@@ -31,7 +31,8 @@ app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
 app.use(sanitize);
 
-app.get('/health', (_req, res) => res.json({ success: true, data: { status: 'ok' } }));
+// Liveness + database readiness. Read-only ping; the response never includes connection details or errors.
+app.get('/health', require('./utils/health'));
 
 const v1 = express.Router();
 v1.use(apiLimiter);

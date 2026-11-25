@@ -1,0 +1,30 @@
+# Authenticated MongoDB replica set. Use together with the base file:
+#   docker compose -f docker-compose.yml -f docker-compose.auth.yml up -d
+#
+# Required variables (put them in the git-ignored root .env, see .env.example):
+#   MONGO_ROOT_USERNAME, MONGO_ROOT_PASSWORD, MONGO_REPLICA_KEY
+#
+# On first start with this file the entrypoint creates the root user if (and only if) none exists.
+# On an EXISTING data volume that is a one-time write of the root user to the `admin` database
+# (application data is not touched). Read docs/SETUP_AND_INSTALLATION.md before doing that.
+services:
+  mongo:
+    environment:
+      MONGO_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:?set MONGO_ROOT_USERNAME in .env}
+      MONGO_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set MONGO_ROOT_PASSWORD in .env}
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env}
+    entrypoint: ["bash", "/docker/entrypoint-auth.sh"]
+    command: []
+    volumes:
+      # Read-only script mount. The keyfile is written inside the container's /tmp, never to a volume.
+      - ./docker/mongo/entrypoint-auth.sh:/docker/entrypoint-auth.sh:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet -u "$$MONGO_ROOT_USERNAME" -p "$$MONGO_ROOT_PASSWORD"
+          --authenticationDatabase admin --eval "rs.status().ok" | grep -q 1
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
